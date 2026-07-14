@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>TeslaNav</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
+    <style>
+        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; overflow: hidden; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+        
+        /* UI Overlays - Using flat rgba instead of expensive blurs for MCU 1 */
+        .overlay-panel {
+            position: absolute;
+            background-color: rgba(90, 90, 90, 0.85);
+            color: white;
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            z-index: 10;
+        }
+
+        /* Top Left */
+        .nav-button {
+            top: 20px;
+            left: 20px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            padding: 10px 20px;
+        }
+
+        /* Top Right */
+        .status-panel {
+            top: 20px;
+            right: 20px;
+            text-align: right;
+            padding: 8px 16px;
+            font-size: 14px;
+        }
+        
+        .legend-panel {
+            top: 70px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            width: 40px;
+            align-items: center;
+        }
+
+        /* Bottom Left */
+        .bottom-controls {
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .location-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background-color: rgba(90, 90, 90, 0.85);
+            padding: 10px 15px;
+            border-radius: 8px;
+            color: white;
+        }
+        
+        .location-text {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .location-label { font-size: 10px; color: #ccc; text-transform: uppercase;}
+        .location-coords { font-size: 14px; font-weight: bold; }
+
+        .icon-btn {
+            background-color: rgba(90, 90, 90, 0.85);
+            border: none;
+            color: white;
+            width: 50px;
+            height: 50px;
+            border-radius: 8px;
+            font-size: 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Police Alert Flash - GPU Accelerated */
+        #flash-border {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            border: 8px solid transparent;
+            pointer-events: none;
+            z-index: 100;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+        
+        .flashing {
+            animation: policeFlash 0.5s infinite;
+            opacity: 1 !important;
+        }
+
+        @keyframes policeFlash {
+            0% { border-color: red; }
+            50% { border-color: blue; }
+            100% { border-color: red; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="flash-border"></div>
+
+<div class="overlay-panel nav-button">
+    📍 Navigate >
+</div>
+
+<div class="overlay-panel status-panel">
+    🟢 13 online
+</div>
+
+<div class="overlay-panel legend-panel">
+    <div>🧭</div>
+    <div style="margin-top: 10px;">
+        <div style="color: #4da6ff;">🛡️ 16</div>
+        <div style="color: #ff4d4d;">⚠️ 6</div>
+        <div style="color: #ffd480;">🚧 15</div>
+    </div>
+</div>
+
+<div class="bottom-controls">
+    <div class="location-info">
+        <div style="color: #ff4d4d; font-size: 24px;">➤</div>
+        <div class="location-text">
+            <span class="location-label">Your Location</span>
+            <span class="location-coords" id="coord-display">30.2588, -81.5296</span>
+        </div>
+    </div>
+    <button class="icon-btn">⚙️</button>
+    <button class="icon-btn">❓</button>
+    <button class="icon-btn" onclick="toggleSatellite()">🛰️</button>
+</div>
+
+<script>
+    // YOU MUST PUT YOUR FREE MAPBOX API KEY HERE
+    mapboxgl.accessToken = 'pk.YOUR_MAPBOX_API_KEY_HERE';
+
+    // Initialize Map with performance settings
+    const map = new mapboxgl.Map({
+        container: 'map', 
+        style: 'mapbox://styles/mapbox/light-v11', // Light mode to match your image
+        center: [-81.5296, 30.2588], 
+        zoom: 13,
+        pitch: 45, // Angled view
+        antialias: false, // Disabled to save MCU memory
+        optimizeForTerrain: false
+    });
+
+    // Add Car Marker
+    const el = document.createElement('div');
+    el.innerHTML = '🚘';
+    el.style.fontSize = '30px';
+    
+    const carMarker = new mapboxgl.Marker(el)
+        .setLngLat([-81.5296, 30.2588])
+        .addTo(map);
+
+    // Mock Police Hazard to demonstrate functionality
+    const policeEl = document.createElement('div');
+    policeEl.innerHTML = '👮';
+    policeEl.style.fontSize = '24px';
+    policeEl.style.background = '#4da6ff';
+    policeEl.style.borderRadius = '50%';
+    policeEl.style.padding = '5px';
+    
+    new mapboxgl.Marker(policeEl)
+        .setLngLat([-81.5350, 30.2650])
+        .addTo(map);
+
+    // Track location if permitted
+    if ('geolocation' in navigator) {
+        navigator.geolocation.watchPosition((position) => {
+            const lng = position.coords.longitude;
+            const lat = position.coords.latitude;
+            
+            carMarker.setLngLat([lng, lat]);
+            map.setCenter([lng, lat]);
+            document.getElementById('coord-display').innerText = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+            
+            // Basic proximity logic
+            const target = [-81.5350, 30.2650];
+            const dist = Math.sqrt(Math.pow(lng - target[0], 2) + Math.pow(lat - target[1], 2));
+            
+            // Trigger flash if close (approx 500m logic simplified)
+            if (dist < 0.005) {
+                document.getElementById('flash-border').classList.add('flashing');
+            } else {
+                document.getElementById('flash-border').classList.remove('flashing');
+            }
+        });
+    }
+
+    let isSatellite = false;
+    function toggleSatellite() {
+        isSatellite = !isSatellite;
+        map.setStyle(isSatellite ? 'mapbox://styles/mapbox/satellite-streets-v12' : 'mapbox://styles/mapbox/light-v11');
+    }
+</script>
+
+</body>
+</html>
